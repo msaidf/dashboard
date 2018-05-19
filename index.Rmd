@@ -1,0 +1,211 @@
+---
+title: "Economic Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+---
+
+
+```{r preambule, include=F}
+knitr::opts_chunk$set(echo = F, message = F, warning=F, cache=T)
+if(!require(pacman))  install.packages('pacman');library(pacman)
+p_load(dplyr)
+p_load(data.table)
+p_load(magrittr)
+p_load(googlesheets)
+p_load(dygraphs)
+p_load(echarts4r)
+p_load(foreach)
+p_load(import)
+import::from(tsbox, ts_xts, ts_df, ts_span, ts_dt, ts_wide, ts_long)
+import::from(xts, xts, cbind.xts, rbind.xts, to.quarterly, .index)
+import::from(zoo, as.yearmon, as.Date.yearmon, index)
+import::from(tidyquant, tq_get)
+import::from(purrr, map_df)
+# gs_token = googlesheets::gs_auth()
+gs_auth('~/Seafile/gs_token.rds')
+```
+
+Macro
+========================
+
+```{r data, include = F}
+tidyquant::quandl_api_key(Sys.getenv('quandl_key'))
+
+inflation = gs_title('inflation') 
+inflation = gs_read(inflation)
+
+gdp = gs_title('gdp')
+gdpq = gs_read(gdp, 'PDByoy')
+
+yoy = tq_get('IDNGDPRQPSMEI',get = 'economic.data') %>% rename(growth = price) 
+infq = tq_get("CPALTT01IDQ659N", get = "economic.data", from = '1969-1-1')
+```
+
+Column {.tabset}
+------------------
+
+<!--
+-->
+
+### Monthly yoy Inflation
+
+```{r inflation monthly wo event lines}
+infm = inflation %>% rename(time = Month) %>% mutate(time = as.yearmon(time, '%B %Y'), time=as.Date(time)) %>% ts_xts
+dygraph(infm['2010/']) %>% 
+	dyRangeSelector
+```
+
+### with Event Markings
+
+```{r inflation monthly}
+dygraph(infm) %>% 
+	dyEvent('2005-03-01', 'Premium 34%, Solar 27%') %>% 
+	dyEvent('2005-10-01', 'Premium 88%, Solar 105%') %>% 
+	dyEvent('2008-05-24', 'Premium 33%, Solar 28%') %>% 
+	dyEvent('2009-01-01', 'Premium -25%, Solar -18%') %>% 
+	dyEvent('2013-06-22', 'Premium 44%, Solar 44%') %>% 
+	dyEvent('2014-11-18', 'Premium 31%, Solar 36%') %>% 
+	dyEvent('2015-01-19', 'Premium -21%, Solar -15%') %>% 
+	dyRangeSelector
+```
+
+
+Column {.tabset}
+------------------
+
+### Quarterly yoy Growth & Inflation
+
+```{r growthinf}
+yoy = gdpq %>% mutate(date = as.yearmon(date, '%m/%d/%Y'), date=as.Date(date)) %>% ts_span(end='2007-12-31') %>% rbind(yoy)
+macro = cbind(ts_xts(infq)['1991/'],ts_xts(yoy)) 
+macro %>% 
+	data.frame(time = zoo::index(.)) %>%
+	mutate_at(vars(price, growth), funs(round), 1) %>% 
+	e_charts(time) %>% 
+	e_line(price,name = 'inflation', showSymbol=F) %>% 
+	e_line(growth, showSymbol=F) %>% 
+	e_datazoom(type = 'inside', orient = 'horizontal') %>% 
+	e_datazoom(type = 'slider', orient = 'horizontal', showDetail = F, fillerColor = 'rgba(47,69,84,0.15)') %>% 
+	e_tooltip(trigger = 'axis')
+```
+
+### since 1969
+
+```{r inflation quarterly}
+infq %>% mutate(price = round(price, 1)) %>% ts_dt %>% 
+	e_charts(date) %>% 
+	e_line(price,name = 'inflation', showSymbol=F) %>% 
+	e_tooltip(trigger = 'axis') %>% 
+	e_datazoom(type = 'inside', orient = 'horizontal') %>% 
+	e_datazoom(type = 'slider', orient = 'horizontal', showDetail = F, fillerColor = 'rgba(47,69,84,0.15)') 
+```
+
+Forex
+======================
+
+Column
+------------------
+
+### IDR
+
+```{r idr}
+# idr_quandl = tq_get(c('CURRFX/USDIDR', 'CURRFX/EURIDR', 'CURRFX/CNYIDR', 'CURRFX/JPYIDR'), 'Quandl')
+# readr::write_csv(idr_quandl, '../idr_quandl.csv')
+
+idr_quandl = data.table::fread('~/Seafile/Data/Agregate/idr_quandl.csv')
+idr_quandl %<>% select(date, symbol, rate) %>% ts_wide 
+names(idr_quandl) = c('date','USD', 'EUR', 'CNY', 'JPY')
+
+fx_idr = tq_get(c('USDIDR=X', 'EURIDR=X', 'CNYIDR=X', 'JPYIDR=X'),  from = '2018-03-01') 
+fx_idr = fx_idr %>% select(date, symbol, close) %>% ts_wide 
+
+names(fx_idr) = c('date', 'USD', 'EUR', 'CNY', 'JPY')
+
+fx_idr = rbind(idr_quandl, fx_idr) %>% ts_dt
+
+fx_idr$CNY = 10*fx_idr$CNY
+fx_idr$JPY = 100*fx_idr$JPY
+fx_idr[date == '2010-10-31'] = NA
+fx_idr[date == '2010-11-01'] = NA
+fx_idr[date == '2012-02-07'] = NA
+
+# fx_idr %>% dygraph  %>% dyRangeSelector %>% dyLegend(width = 500) %>% dyOptions(colors = RColorBrewer::brewer.pal(4, "Set1"))
+fx_idr %>% 
+	e_charts(date) %>% 
+	e_line(USD, showSymbol=F) %>% 
+	e_line(EUR, showSymbol=F) %>% 
+	e_line(CNY, name = '10 CNY', showSymbol=F) %>% 
+	e_line(JPY, name = '100 JPY', showSymbol=F) %>% 
+	e_tooltip(trigger = 'axis') %>% 
+	e_datazoom(type = 'inside', orient = 'horizontal') %>% 
+	e_datazoom(type = 'slider', orient = 'horizontal', showDetail = F, fillerColor = 'rgba(47,69,84,0.15)') 
+```
+
+Column
+------------------
+
+### USD
+
+
+```{r usd}
+# usd_quandl = tq_get(c('CURRFX/IDRUSD', 'CURRFX/EURUSD', 'CURRFX/CNYUSD', 'CURRFX/JPYUSD'), 'Quandl') 
+# readr::write_csv(usd_quandl, '~/Seafile/Data/Agregate/usd_quandl.csv')
+
+usd_quandl = data.table::fread('~/Seafile/Data/Agregate/usd_quandl.csv')
+usd_quandl %<>% select(date, symbol, rate) %>% ts_wide 
+names(usd_quandl) = c('date','IDR', 'EUR', 'CNY', 'JPY')
+
+fx_usd = tq_get(c('IDRUSD=X', 'EURUSD=X', 'CNYUSD=X', 'JPYUSD=X'), from = '2018-03-01' )
+fx_usd = fx_usd %>% select(date, symbol, close) %>% ts_wide
+
+names(fx_usd) = c('date', 'IDR', 'EUR', 'CNY', 'JPY')
+
+fx_usd = rbind(usd_quandl, fx_usd)
+
+fx_usd$CNY = 10*fx_usd$CNY
+fx_usd$JPY = 100*fx_usd$JPY
+fx_usd$IDR = 10000*fx_usd$IDR
+fx_usd[date == '2010-10-31'] = NA
+fx_usd[date == '2010-11-01'] = NA
+fx_usd[date == '2012-02-07'] = NA
+
+fx_usd  %>% 
+	e_charts(date) %>% 
+	e_line(IDR, name = '10,000 IDR', showSymbol=F) %>% 
+	e_line(EUR, showSymbol=F) %>% 
+	e_line(CNY, name = '10 CNY', showSymbol=F) %>% 
+	e_line(JPY, name = '100 JPY', showSymbol=F) %>% 
+	e_tooltip(trigger = 'axis') %>% 
+	e_datazoom(type = 'inside', orient = 'horizontal') %>% 
+	e_datazoom(type = 'slider', orient = 'horizontal', showDetail = F, fillerColor = 'rgba(47,69,84,0.15)') 
+	# dygraph  %>% dyRangeSelector %>% dyLegend(width = 500) %>% dyOptions(colors = RColorBrewer::brewer.pal(4, "Set1"))
+```
+
+
+Commodities
+======================
+
+Column
+------------------
+
+### Crude Oil Price ($ per barrel)
+
+```{r oil}
+tq_get("DCOILWTICO", get = "economic.data") %>% 
+	e_charts(date) %>% 
+	e_line(price,name = 'Crude Oil Price', showSymbol=F, legend=F) %>% 
+	e_tooltip(trigger = 'axis') %>% 
+	e_datazoom(type = 'inside', orient = 'horizontal') %>% 
+	e_datazoom(type = 'slider', orient = 'horizontal', showDetail = F, fillerColor = 'rgba(47,69,84,0.15)')
+```
+
+Column
+------------------
+
+### Residential Property Index (2010 = 100)
+
+```{r property}
+tq_get("QIDR628BIS", get = "economic.data") %>% ts_xts %>% setNames('index') %>%  dygraph %>% dyRangeSelector
+```
+
